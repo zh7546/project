@@ -407,4 +407,47 @@ class Embeddings_output(nn.Module):
         hx = self.output(hx)
         return hx
 
+class Restormer(nn.Module):
+    def __init__(self,
+                 dim=48,
+                 num_blocks=[4, 6, 6, 8],
+                 num_heads=[1, 2, 4, 8],
+                 kernel=7,
+                 ffn_expansion_factor=2.66,
+                 bias=False):
+        super(Restormer, self).__init__()
+
+        self.encoder = Embeddings(dim)
+
+        self.multi_scale_fusion_level1 = LGFF(dim * 7, dim * 1, ffn_expansion_factor, bias)
+        self.multi_scale_fusion_level2 = LGFF(dim * 7, dim * 2, ffn_expansion_factor, bias)
+
+        self.decoder = Embeddings_output(dim, num_blocks, kernel,
+                                         num_heads, bias)
+
+    def forward(self, x):
+        # x = self.E(x)
+        # y, _ = self.E(x, gt)
+
+        hx, res1, res2 = self.encoder(x)
+
+        # print("hx",hx.shape)
+        # print("res1",res1.shape)
+        # print("res2",res2.shape)
+
+        res2_1 = F.interpolate(res2, scale_factor=2)
+        res1_2 = F.interpolate(res1, scale_factor=0.5)
+        hx_2 = F.interpolate(hx, scale_factor=2)
+        hx_1 = F.interpolate(hx_2, scale_factor=2)
+
+        # print("res1",res1.shape)
+        # print("res2_1", res2_1.shape)
+        # print("hx_1",hx_1.shape)
+
+        res1 = F.relu(self.multi_scale_fusion_level1(torch.cat((res1, res2_1, hx_1), dim=1)))
+        res2 = F.relu(self.multi_scale_fusion_level2(torch.cat((res1_2, res2, hx_2), dim=1)))
+
+        hx = self.decoder(hx, res1, res2)
+
+        return hx + x
 
