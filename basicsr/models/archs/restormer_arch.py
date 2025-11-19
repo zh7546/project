@@ -69,45 +69,7 @@ class LayerNorm(nn.Module):
         return to_4d(self.body(to_3d(x)), h, w)
 
 
-class LGFF(nn.Module):
-    def __init__(self, in_dim, out_dim, ffn_expansion_factor, bias):
-        super(LGFF, self).__init__()
-        # 改进后的投影层（参数复用）
-        self.project_in = nn.Sequential(
-            nn.Conv2d(in_dim, in_dim, kernel_size=3, padding=1, groups=in_dim),
-            nn.GELU(),
-            nn.Conv2d(in_dim, out_dim, kernel_size=1)
-        )
-        self.project = nn.Conv2d(in_dim, out_dim, kernel_size=1)
-        self.norm = LayerNorm(out_dim, LayerNorm_type='WithBias')
-        self.ffn = GDFN(out_dim, ffn_expansion_factor, bias)
 
-        # 混合注意力机制（通道+空间）
-        self.attn = nn.Sequential(
-            nn.Conv2d(out_dim, out_dim // 4, 1),  # 通道压缩
-            nn.GELU(),
-            SpatialGate(out_dim // 4),  # 空间注意力
-            nn.Conv2d(out_dim // 4, out_dim, 1)  # 通道恢复S
-        )
-
-        # 特征复用门控（不增加新参数）
-        self.gate = nn.Parameter(torch.zeros(1), requires_grad=True)
-
-    def forward(self, x):
-        identity = x
-        x = self.project_in(x)
-        x = x + self.ffn(self.norm(x))
-
-        # 混合注意力分支
-        attn = self.attn(x)
-
-        # 门控融合（原始特征与注意力特征）
-        x = x + self.gate * attn
-
-        # 跨层连接（无额外内存消耗）
-        if identity.shape[1] == x.shape[1]:
-            x = x + identity
-        return x
 
 
 class SpatialGate(nn.Module):
@@ -284,72 +246,7 @@ class CBAM(nn.Module):
 
 
 
-# 改进后的 Embeddings 网络
-class Embeddings(nn.Module):
-    def __init__(self, dim):
-        super(Embeddings, self).__init__()
 
-        self.activation = nn.LeakyReLU(0.2, True)
-
-        # Level 1
-        self.level1 = nn.Sequential(
-            nn.Conv2d(3, dim, kernel_size=3, padding=1),
-            self.activation,
-            #SEBlock(dim),
-            CBAM(dim)
-        )
-
-        # Level 1 - 深度可分离卷积增强局部特征
-        self.level1_res = nn.Sequential(
-            nn.Conv2d(dim, dim, kernel_size=3, padding=1, groups=dim),  # 深度可分离
-            self.activation,
-            nn.Conv2d(dim, dim, kernel_size=3, padding=1)
-        )
-
-        # Level 2 (下采样)
-        self.level2 = nn.Sequential(
-            nn.Conv2d(dim, dim * 2, kernel_size=3, stride=2, padding=1),
-            self.activation,
-            #SEBlock(dim * 2),
-            CBAM(dim * 2)
-        )
-        self.level2_res = nn.Sequential(
-            nn.Conv2d(dim * 2, dim * 2, kernel_size=3, padding=1, groups=dim * 2),
-            self.activation,
-            nn.Conv2d(dim * 2, dim * 2, kernel_size=3, padding=1)
-        )
-
-        # Level 3 (更深层次，多尺度感知)
-        self.level3 = nn.Sequential(
-            nn.Conv2d(dim * 2, dim * 4, kernel_size=3, stride=2, padding=2, dilation=2),  # 空洞卷积
-            self.activation,
-            #SEBlock(dim * 4),
-            CBAM(dim * 4)
-        )
-        self.level3_res = nn.Sequential(
-            nn.Conv2d(dim * 4, dim * 4, kernel_size=3, padding=2, dilation=2, groups=dim * 4),
-            self.activation,
-            nn.Conv2d(dim * 4, dim * 4, kernel_size=3, padding=2, dilation=2)
-        )
-
-    def forward(self, x):
-        # Level 1
-        hx = self.level1(x)
-        hx = self.activation(self.level1_res(hx) + hx)
-
-        residual_1 = hx
-
-        # Level 2
-        hx2 = self.level2(hx)
-        hx2 = self.activation(self.level2_res(hx2) + hx2)
-
-        residual_2 = hx2
-
-        # Level 3
-        hx3 = self.level3(hx2)
-        hx3 = self.activation(self.level3_res(hx3) + hx3)
-
-        return hx3, residual_1, residual_2
 
 
 class Embeddings_output(nn.Module):
@@ -426,23 +323,17 @@ class Restormer(nn.Module):
                                          num_heads, bias)
 
     def forward(self, x):
-        # x = self.E(x)
-        # y, _ = self.E(x, gt)
+
 
         hx, res1, res2 = self.encoder(x)
 
-        # print("hx",hx.shape)
-        # print("res1",res1.shape)
-        # print("res2",res2.shape)
+
 
         res2_1 = F.interpolate(res2, scale_factor=2)
         res1_2 = F.interpolate(res1, scale_factor=0.5)
         hx_2 = F.interpolate(hx, scale_factor=2)
         hx_1 = F.interpolate(hx_2, scale_factor=2)
 
-        # print("res1",res1.shape)
-        # print("res2_1", res2_1.shape)
-        # print("hx_1",hx_1.shape)
 
         res1 = F.relu(self.multi_scale_fusion_level1(torch.cat((res1, res2_1, hx_1), dim=1)))
         res2 = F.relu(self.multi_scale_fusion_level2(torch.cat((res1_2, res2, hx_2), dim=1)))
@@ -450,4 +341,5 @@ class Restormer(nn.Module):
         hx = self.decoder(hx, res1, res2)
 
         return hx + x
+
 
