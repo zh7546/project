@@ -16,12 +16,6 @@ cd Restormer
 ./train.sh Motion_Deblurring/Options/Deblurring_Restormer.yml
 ```
 
-**Note:** The above training script uses 8 GPUs by default. To use any other number of GPUs, modify [Restormer/train.sh](../train.sh) and [Motion_Deblurring/Options/Deblurring_Restormer.yml](Options/Deblurring_Restormer.yml)
-
-## Evaluation
-
-Download the pre-trained [model](https://drive.google.com/drive/folders/1czMyfRTQDX3j3ErByYeZ1PM4GVLbJeGK?usp=sharing) and place it in `./pretrained_models/`
-
 #### Testing on GoPro dataset
 
 - Download GoPro testset, run
